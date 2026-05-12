@@ -8,6 +8,7 @@ import logging
 import os
 import sys
 
+from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -16,6 +17,9 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
+
+# .env 파일 로드
+load_dotenv()
 
 # 로깅 설정
 logging.basicConfig(

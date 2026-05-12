@@ -124,11 +124,14 @@ def get_crypto_news() -> str:
     return "\n".join(lines)
 
 
-def get_deepseek_summary(world_titles: list[str], crypto_titles: list[str]) -> str:
-    """딥시크 AI를 사용해 뉴스 제목 기반 3줄 요약 생성"""
+def get_deepseek_summary(world_titles: list[str], crypto_titles: list[str]) -> dict:
+    """딥시크 AI를 사용해 뉴스 제목 기반 요약 생성 (세계 경제 요약, 코인 요약, 시장 전망 3줄)"""
     prompt = (
         "다음은 오늘의 세계 경제 뉴스 제목과 가상화폐 뉴스 제목입니다.\n"
-        "이를 바탕으로 오늘 시장의 전망을 3줄로 요약해 주세요.\n\n"
+        "이를 바탕으로 아래 세 가지 항목을 생성해 주세요.\n\n"
+        "1. 세계 경제 뉴스 요약 (2~3문장)\n"
+        "2. 코인 주요 뉴스 요약 (2~3문장)\n"
+        "3. 오늘 시장 전망 3줄 요약\n\n"
         "세계 경제 뉴스:\n"
     )
     for t in world_titles:
@@ -136,7 +139,15 @@ def get_deepseek_summary(world_titles: list[str], crypto_titles: list[str]) -> s
     prompt += "\n가상화폐 뉴스:\n"
     for t in crypto_titles:
         prompt += f"- {t}\n"
-    prompt += "\n3줄 요약:"
+    prompt += (
+        "\n응답 형식:\n"
+        "🌍 세계 경제 뉴스 요약: ...\n"
+        "🪙 코인 주요 뉴스 요약: ...\n"
+        "💡 오늘 시장 전망 3줄 요약:\n"
+        "1. ...\n"
+        "2. ...\n"
+        "3. ..."
+    )
 
     try:
         response = client.chat.completions.create(
@@ -145,14 +156,45 @@ def get_deepseek_summary(world_titles: list[str], crypto_titles: list[str]) -> s
                 {"role": "system", "content": "당신은 경제 분석 전문가입니다. 간결하고 명확하게 요약합니다."},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=300,
+            max_tokens=500,
             temperature=0.7,
         )
-        summary = response.choices[0].message.content.strip()
-        return f"💡 **딥시크 AI 시장 전망 3줄 요약**\n{summary}"
+        full_text = response.choices[0].message.content.strip()
+        # 파싱: 각 섹션 분리
+        world_summary = ""
+        crypto_summary = ""
+        market_outlook = ""
+        lines = full_text.split("\n")
+        current_section = None
+        for line in lines:
+            if line.startswith("🌍"):
+                current_section = "world"
+                world_summary = line
+            elif line.startswith("🪙"):
+                current_section = "crypto"
+                crypto_summary = line
+            elif line.startswith("💡"):
+                current_section = "outlook"
+                market_outlook = line
+            else:
+                if current_section == "world":
+                    world_summary += "\n" + line
+                elif current_section == "crypto":
+                    crypto_summary += "\n" + line
+                elif current_section == "outlook":
+                    market_outlook += "\n" + line
+        return {
+            "world": world_summary.strip() if world_summary else "🌍 세계 경제 뉴스 요약\n(요약을 생성할 수 없습니다)",
+            "crypto": crypto_summary.strip() if crypto_summary else "🪙 코인 주요 뉴스 요약\n(요약을 생성할 수 없습니다)",
+            "outlook": market_outlook.strip() if market_outlook else "💡 오늘 시장 전망 3줄 요약\n(요약을 생성할 수 없습니다)",
+        }
     except Exception as e:
         logger.error(f"딥시크 API 호출 실패: {e}")
-        return "💡 **딥시크 AI 시장 전망 3줄 요약**\n(요약을 생성할 수 없습니다)"
+        return {
+            "world": "🌍 세계 경제 뉴스 요약\n(요약을 생성할 수 없습니다)",
+            "crypto": "🪙 코인 주요 뉴스 요약\n(요약을 생성할 수 없습니다)",
+            "outlook": "💡 오늘 시장 전망 3줄 요약\n(요약을 생성할 수 없습니다)",
+        }
 
 
 def build_briefing() -> str:
@@ -177,22 +219,32 @@ def build_briefing() -> str:
     except Exception:
         pass
 
-    summary = get_deepseek_summary(world_titles, crypto_titles)
+    summaries = get_deepseek_summary(world_titles, crypto_titles)
 
-    return f"{prices}\n\n{world_news}\n\n{crypto_news}\n\n{summary}"
+    return (
+        f"{prices}\n\n"
+        f"{summaries['world']}\n\n"
+        f"{summaries['crypto']}\n\n"
+        f"{summaries['outlook']}"
+    )
 
 
 # ---------- 텔레그램 핸들러 ----------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """사용자가 /start 명령어를 보냈을 때 실행됩니다."""
+    global registered_chat_ids
     user = update.effective_user
+    chat_id = update.effective_chat.id
+    registered_chat_ids.add(chat_id)
+    logger.info(f"사용자 등록됨: chat_id={chat_id}, name={user.first_name}")
     await update.message.reply_text(
         f"안녕하세요, {user.first_name}님!\n"
         "저는 종합 경제 브리핑 봇입니다.\n"
         "명령어:\n"
         "/briefing - 지금 바로 브리핑 받기\n"
-        "매일 오전 8시에 자동으로 브리핑을 보내드립니다."
+        "매일 오전 8시에 자동으로 브리핑을 보내드립니다.\n\n"
+        "자동 브리핑을 받으시려면 /start 명령어를 한 번 더 입력해 주세요."
     )
 
 
@@ -214,9 +266,13 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 # ---------- 스케줄러 ----------
 
-def send_scheduled_briefing():
-    """매일 오전 8시에 실행되는 스케줄 함수"""
-    global application_instance
+# 전역 변수: 등록된 chat_id 목록 (스케줄러에서 사용)
+registered_chat_ids: set[int] = set()
+
+
+async def send_scheduled_briefing_async():
+    """비동기 스케줄 브리핑 전송"""
+    global application_instance, registered_chat_ids
     if application_instance is None:
         logger.warning("Application 인스턴스가 없어 스케줄 브리핑을 보낼 수 없습니다.")
         return
@@ -224,22 +280,37 @@ def send_scheduled_briefing():
     logger.info("스케줄 브리핑 생성 시작")
     try:
         briefing_text = build_briefing()
-        # 모든 채팅에 보내는 대신, 봇이 메시지를 받은 채팅들에 보내는 것은 복잡하므로
-        # 여기서는 간단히 로그만 남기고 실제 전송은 생략합니다.
-        # 실제로는 사용자별 chat_id를 저장해야 합니다.
-        # 여기서는 예시로 application_instance.bot.send_message(chat_id=..., text=briefing_text, parse_mode="Markdown")
-        logger.info("스케줄 브리핑 생성 완료 (전송은 생략)")
+        for chat_id in registered_chat_ids:
+            try:
+                await application_instance.bot.send_message(
+                    chat_id=chat_id,
+                    text=briefing_text,
+                    parse_mode="Markdown"
+                )
+                logger.info(f"스케줄 브리핑 전송 완료 (chat_id={chat_id})")
+            except Exception as e:
+                logger.error(f"스케줄 브리핑 전송 실패 (chat_id={chat_id}): {e}")
     except Exception as e:
         logger.error(f"스케줄 브리핑 생성 실패: {e}")
 
 
 def run_scheduler():
     """스케줄러를 별도 스레드에서 실행"""
-    schedule.every().day.at("08:00").do(send_scheduled_briefing)
-    while True:
-        schedule.run_pending()
-        import time
-        time.sleep(30)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    async def scheduled_task():
+        while True:
+            schedule.run_pending()
+            await asyncio.sleep(30)
+
+    schedule.every().day.at("08:00").do(
+        lambda: asyncio.run_coroutine_threadsafe(
+            send_scheduled_briefing_async(), loop
+        )
+    )
+
+    loop.run_until_complete(scheduled_task())
 
 
 # ---------- 메인 ----------
